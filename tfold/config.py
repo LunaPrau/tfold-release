@@ -3,10 +3,10 @@
 
 #tfold data folder
 #e.g. '/data/vmikhayl/tfold-release/data'
-data_dir=#
+data_dir="/home/marta_aikium_com/MHC_peptide_binding_model/tools/tfold-release/data"
 
 #a tmp folder to store data from blastp alignments
-seq_tools_tmp_dir=#
+seq_tools_tmp_dir="/home/marta_aikium_com/MHC_peptide_binding_model/tools/tfold-release/seq_tools_tmp_dir"
 ##########################################################################################################
 ##########################################################################################################
 ##########################################################################################################
