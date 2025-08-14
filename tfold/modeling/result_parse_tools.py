@@ -64,6 +64,7 @@ def parse_results(ctarget_dir):
     #check if rmsd is present
     pmhc_id=os.listdir(ctarget_dir+'/outputs')[0]
     pmhc_id=int(pmhc_id)
+    get_rmsd=None
     for result_filename in os.listdir(ctarget_dir+f'/outputs/{pmhc_id}'):      
         if result_filename.endswith('.pkl'):
             model_id=int(result_filename[:-4].split('_')[-1]) #assume use exactly one AF model
