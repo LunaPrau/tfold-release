@@ -3,3 +3,6 @@ data/
 tmp/
 .ipynb_checkpoints/
 __pycache__/
+data.tar.gz
+md5sums.txt
+seq_tools_tmp_dir/
