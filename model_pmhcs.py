@@ -32,7 +32,7 @@ if __name__=='__main__':
     #save AF inputs and input dataframe
     with open(input_dir+'/input.pckl','wb') as f: 
         pickle.dump(af_inputs,f) 
-    df_to_model.to_pickle(working_dir+'/target_df.pckl')
+    df_to_model.to_pickle(working_dir+'/input.pckl')
     
     #input_dir=os.path.abspath(input_dir)
     #output_dir=os.path.abspath(output_dir)

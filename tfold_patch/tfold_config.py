@@ -4,18 +4,18 @@
 ### SET THESE DIRECTORIES ################################################################################
 
 #AF folder containing '/params' (AF params), e.g. '/data/vmikhayl/alphafold-multimer/databases' 
-data_dir      =#
+data_dir      = "/home/mchrnwsk/aikium/external/alphafold-2.1.0"
 
 #AF folder containing run_alphafold.py, e.g. '/data/vmikhayl/alphafold-multimer/alphafold' 
-alphafold_dir =#
+alphafold_dir = "/home/mchrnwsk/aikium/external/alphafold-2.1.0"
 
 #folder with TFold data, e.g. '/data/vmikhayl/tfold-release/data'      
-tfold_data_dir=#   
+tfold_data_dir= "/home/mchrnwsk/aikium/external/tfold-release/data"
 
 #path to kalign (used by AF to realign templates);
 #if you installed conda environment tfold-env, kalign should be in the /envs/tfold-env/bin/kalign in you conda folder
 #e.g.:'/home/vmikhayl/anaconda3/envs/tfold-env/bin/kalign'
-kalign_binary_path=#
+kalign_binary_path= "/home/mchrnwsk/anaconda3/envs/tfold/bin/kalign"
 
 ##########################################################################################################
 ##########################################################################################################
