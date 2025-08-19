@@ -208,36 +208,38 @@ def map_one_mhc_seq(s):
         sA,sB=s.split('/')
         cl='II'
         try:
-            mhc_a=seq_tools.mhc_from_seq(sA)
+            mhc_a,al,ar=seq_tools.mhc_from_seq(sA, return_boundaries=True)
         except Exception:
             raise ValueError(f'Cannot align alpha-chain MHC sequence {sA}.')
         try:
-            mhc_b=seq_tools.mhc_from_seq(sB)
+            mhc_b,bl,br=seq_tools.mhc_from_seq(sB, return_boundaries=True)
         except Exception:
             raise ValueError(f'Cannot align beta-chain MHC sequence {sB}.')        
     else:
         cl='I'
         try:
-            mhc_a=seq_tools.mhc_from_seq(s)
+            mhc_a,al,ar=seq_tools.mhc_from_seq(s, return_boundaries=True)
         except Exception:
             raise ValueError(f'Cannot align MHC sequence {s}.')
-        mhc_b=None
-    return mhc_a,mhc_b,cl
+        mhc_b,bl,br=None,None,None
+    a_boundary=f"{str(al)}:{str(ar)}"
+    b_boundary=f"{str(bl)}:{str(br)}"
+    return mhc_a,a_boundary,mhc_b,b_boundary,cl
 
 def prepare_mhc_objects(df):
-    if 'MHC sequence' in df:
-        print('Aligning MHC sequences.')
-        f,k=map_one_mhc_seq,'MHC sequence'
+    if 'MHC_sequence' in df:
+        print('Aligning MHC_sequences.')
+        f,k=map_one_mhc_seq,'MHC_sequence'
     elif 'MHC allele' in df:
         print('Retrieving MHC objects from alleles.')
         f,k=map_one_mhc_allele,'MHC allele'  
     else:
-        raise ValueError('Cannot find columns "MHC allele" or "MHC sequence" in input data.')
-    df[['mhc_a','mhc_b','class']]=df[k].map(f).tolist()
+        raise ValueError('Cannot find columns "MHC allele" or "MHC sequence" or "MHC_sequence" in input data.')
+    df[['mhc_a','mhc_a_boundary','mhc_b','mhc_b_boundary','class']]=df[k].map(f).tolist()
 
 def preprocess_df(df,mhc_as_obj=False,use_seqnnf=False):
     '''
-    takes a df with columns "pep", "MHC allele" or "MHC sequence";
+    takes a df with columns "pep", "MHC allele" or "MHC_sequence";
     adds pmhc_id if not present;
     adds MHC NUMSEQ objects in columns mhc_a and mhc_b (skip if mhc_as_obj=True);
     runs seqnn (for cl II will use seqnn-f if use_seqnnf=True)
@@ -254,7 +256,9 @@ def preprocess_df(df,mhc_as_obj=False,use_seqnnf=False):
     
 def make_inputs(df,params={},date_cutoff=None,print_stats=False):
     '''
-    takes df with fields: class, pep (str for pep seq), mhc_a (mhc_b) (NUMSEQ objects), (pdb_id for true structure);
+    takes df with fields: class, pep (str for pep seq), mhc_a (mhc_b) (NUMSEQ objects),
+    mhc_a(b)_boundary_left and mhc_a(b)_boundary_right (int),
+    (pdb_id for true structure);
     optionally params and date_cutoff (for templates), print_stats;
     params for each of two classes should have entries: 
     templates_per_register, mhc_cutoff, score_cutoff, kd_threshold, use_mhc_msa, use_paired_msa, tile_registers;
@@ -279,7 +283,7 @@ def make_inputs(df,params={},date_cutoff=None,print_stats=False):
     #add pmhc_id if not present (used by AF for naming output files)
     if 'pmhc_id' not in df:
         df['pmhc_id']=df.index
-    #make AF inputs (incl. split templates)                                                                    
+    #make AF inputs (incl. split templates)                                                               
     inputs_dicts=df.apply(lambda x:_make_af_inputs_for_one_entry(x,params[x['class']]['use_mhc_msa'],
                                                                  params[x['class']]['use_paired_msa'],                                                                                                      params[x['class']]['tile_registers']),axis=1)    
     inputs=[]

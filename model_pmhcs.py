@@ -17,8 +17,12 @@ if __name__=='__main__':
     date_cutoff=args.date_cutoff                        
     #make numbered MHC objects and run seqnn
     df_to_model=make_inputs.preprocess_df(df_to_model)
-
+    # df_to_model at this point contains the following columns: ['pep', 'MHC_sequence', 'pmhc_id', 'mhc_a', 'mhc_a_boundary_left','mhc_a_boundary_right', 'mhc_b', 'mhc_b_boundary_left', 'mhc_b_boundary_right', 'class', 'seqnn_logkds_all', 'seqnn_logkd',  'seqnn_tails'
     #make AF inputs
+    df_to_save = df_to_model[['pep', 'MHC_sequence', 'pmhc_id', 'mhc_a', 'mhc_a_boundary', 'mhc_b', 'mhc_b_boundary', 'class', 'seqnn_logkd']].copy()
+    df_to_save.loc[:, "mhc_a"] = df_to_save["mhc_a"].apply(lambda x: x.seq())
+    df_to_save.loc[:, "mhc_b"] = df_to_save["mhc_b"].apply(lambda x: x.seq())
+    df_to_save.to_csv(working_dir+'/preprocessed_input.csv', index=False)
     af_inputs=make_inputs.make_inputs(df_to_model,date_cutoff=date_cutoff,print_stats=False)
     print('total AF models to be produced:',len(af_inputs))
 

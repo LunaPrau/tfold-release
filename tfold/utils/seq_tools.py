@@ -620,7 +620,7 @@ def mhc_from_seq(seq,species=None,target=None,return_boundaries=False,rename_by_
         else:
             species,locus,allele=hit['species'],hit['locus'],hit['allele']
         target=mhcs[species,locus,allele]                           
-    result,il,ir=realign(seq,target,'MHC')    
+    result,il,ir=realign(seq,target,'MHC')  
     if return_boundaries:
         return result,il,ir-1
     else:
