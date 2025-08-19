@@ -4,10 +4,10 @@
 ### SET THESE DIRECTORIES ################################################################################
 
 #AF folder containing '/params' (AF params), e.g. '/data/vmikhayl/alphafold-multimer/databases' 
-data_dir      ="/home/marta_aikium_com/MHC_peptide_binding_model/tools/alphafold_2.1.0/alphafold-2.1.0"
+data_dir      ="/home/marta_aikium_com/MHC_peptide_binding_model/tools/alphafold_2.1.0"
 
 #AF folder containing run_alphafold.py, e.g. '/data/vmikhayl/alphafold-multimer/alphafold' 
-alphafold_dir ="/home/marta_aikium_com/MHC_peptide_binding_model/tools/alphafold_2.1.0/alphafold-2.1.0"
+alphafold_dir ="/home/marta_aikium_com/MHC_peptide_binding_model/tools/alphafold_2.1.0"
 
 #folder with TFold data, e.g. '/data/vmikhayl/tfold-release/data'      
 tfold_data_dir="/home/marta_aikium_com/MHC_peptide_binding_model/tools/tfold-release/data"
