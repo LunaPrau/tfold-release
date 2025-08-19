@@ -302,10 +302,3 @@ def make_inputs(df,params={},date_cutoff=None,print_stats=False):
                 print('pmhcs: {:3d}; runs: {:4d}, runs per pmhc: av {:3.1f}, max {:2d}; registers per pmhc: av {:3.1f}, max {:2d}'.format(
                        queries,runs,runs/queries,max(run_counts[cl]),registers/queries,max(reg_counts[cl])))                 
     return inputs
-    
-    
-    
-    
-    
-    
-    

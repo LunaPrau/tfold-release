@@ -38,9 +38,3 @@ if __name__=='__main__':
         pickle.dump(af_inputs,f) 
     df_to_model.to_pickle(working_dir+'/target_df.pckl')
     
-    #input_dir=os.path.abspath(input_dir)
-    #output_dir=os.path.abspath(output_dir)
-    #print('#############################################################')
-    #print('Next, run tfold_run_alphafold.py on a GPU as follows:')
-    #print(f'python tfold_run_alphafold.py --inputs {input_dir}/input.pckl --output_dir {output_dir}') 
-    #print('#############################################################')
