@@ -19,6 +19,9 @@ import sys
 from tfold_patch.tfold_config import data_dir,mmcif_dir,kalign_binary_path,af_params,alphafold_dir
 sys.path.append(alphafold_dir) #path to AlphaFold for import
 
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 """Full AlphaFold protein structure prediction script."""
 import json
 import os
@@ -27,6 +30,7 @@ import pickle
 import random
 import time
 from typing import Dict, Union, Optional
+import pickle
 
 from absl import app
 from absl import flags
@@ -85,12 +89,18 @@ def predict_structure(sequences,msas,template_hits,renumber_list,
                       current_id,output_dir,                          
                       data_pipeline,model_runners,benchmark,random_seed,true_pdb=None):  
     logging.info(f'Predicting for id {current_id}')
+
     timings = {}        
+    ranking_confidences = {}
+
     os.makedirs(output_dir,exist_ok=True)    
     # Get features.
     t_0=time.time()    
     feature_dict=data_pipeline.process(sequences,msas,template_hits)
     timings['features']=time.time()-t_0    
+    features_output_path = os.path.join(output_dir, 'features.pkl')
+    with open(features_output_path, 'wb') as f:
+        pickle.dump(feature_dict, f, protocol=4)
     # Run the models.    
     num_models=len(model_runners)
     for model_index,(model_name,model_runner) in enumerate(model_runners.items()):
@@ -115,6 +125,10 @@ def predict_structure(sequences,msas,template_hits,renumber_list,
         # Add the predicted LDDT in the b-factor column.
         # Note that higher predicted LDDT value means higher model confidence.
         plddt=prediction_result['plddt']
+        
+        # TODO: should this get used somewhere?
+        # ranking_confidences[model_name] = prediction_result['ranking_confidence']
+        
         plddt_b_factors=np.repeat(plddt[:, None],residue_constants.atom_type_num,axis=-1)
         unrelaxed_protein=protein.from_prediction(features=processed_feature_dict,result=prediction_result,
                                                   b_factors=plddt_b_factors,remove_leading_feature_dimension=True)
@@ -137,9 +151,6 @@ def predict_structure(sequences,msas,template_hits,renumber_list,
         with open(unrelaxed_pdb_path,'w') as f:
             f.write(unrelaxed_pdb_renumbered)                 
     logging.info('Final timings for %s: %s', current_id, timings)
-    #timings_output_path=os.path.join(output_dir,f'timings_{current_id}.json')
-    #with open(timings_output_path, 'w') as f:
-    #    f.write(json.dumps(timings,indent=4))
 
 def main(argv):    
     t_start=time.time()    
