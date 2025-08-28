@@ -164,11 +164,23 @@ def assign_templates(cl,pep_seq,pep_tails,mhc_A,mhc_B=None,templates_per_registe
     if mhc_cutoff:
         ind_keep&=((mhc_scores-np.min(mhc_scores[ind_keep]))<=mhc_cutoff)        
     #pep pdbnums   
-    pep_len=len(pep_seq)    
-    if cl=='I':        
-        c_pep_pdbnums=[(x,_make_pep_pdbnums_I(pep_len,x[0],x[1])) for x in pep_tails]
+    pep_len=len(pep_seq)
+    if cl=='I':
+        c_pep_pdbnums = []
+        for x in pep_tails:
+            try:
+                c_pep_pdbnums.append((x,_make_pep_pdbnums_I(pep_len,x[0],x[1])))
+            except AssertionError as e:
+                # Continue to next run
+                continue
     else:        
-        c_pep_pdbnums=[(x,_make_pep_pdbnums_II(pep_len,x[0])) for x in pep_tails]    
+        c_pep_pdbnums = []
+        for x in pep_tails:
+            try:
+                c_pep_pdbnums.append((x,_make_pep_pdbnums_II(pep_len,x[0])))
+            except AssertionError as e:
+                # Continue to next run
+                continue
     templates_assigned={}
     for tails,pdbnum in c_pep_pdbnums:
         pep_data=seq_tools.NUMSEQ(seq=pep_seq,pdbnum=pdbnum).data

@@ -34,8 +34,8 @@ template_source_dir=data_dir+'/experimental_structures/processed_updated'
 
 #seqnn settings
 seqnn_params={'max_core_len_I':12,    #peptide input length is this +2  #(core truncation, indep from reg number)
-              'max_pep_len_I' :15,    #to set max number of registers   #(reg number)
-              'max_pep_len_II':25,    #to set max number of registers
+              'max_pep_len_I' :36,    #to set max number of registers   #(reg number)
+              'max_pep_len_II':36,    #to set max number of registers
               'n_mhc_I':26,           #mhc pseudoseq length
               'n_mhc_II':30,          #mhc pseudoseq length
               'n_tail_bits':3         #n bits to encode tails; shared between cl 1 and 2

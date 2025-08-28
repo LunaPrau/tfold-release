@@ -1,6 +1,9 @@
 import numpy as np
 import pickle
 
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+
 from tensorflow.keras.regularizers import l1,l2
 from tensorflow.keras.constraints import non_neg
 from tensorflow.math import reduce_sum, reduce_min, reduce_mean, log as tf_log, exp as tf_exp

@@ -12,6 +12,8 @@ do
     esac
 done
 
+mkdir -p $working_dir
+
 python model_pmhcs.py $input_file $working_dir $DATE
 python tfold_run_alphafold.py --inputs $working_dir/inputs/input.pckl --output_dir $working_dir/outputs
-python collect_results.py $working_dir
+# python collect_results.py $working_dir

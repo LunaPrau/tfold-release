@@ -8,6 +8,8 @@ from tfold.nn import models as tfold_models
 from tfold.nn import nn_utils
 from tfold.config import seqnn_obj_dir
 
+import pandas as pd
+
 def _create_kd_arrays(cl,l):
     if cl=='I':
         tails=nn_utils.generate_registers_I(l)
@@ -17,15 +19,33 @@ def _create_kd_arrays(cl,l):
     
 def predict(df,cl,mhc_as_obj=False,model_list=None,params_dir=None,weights_dir=None,keep_all_predictions=False):
     df=df.copy()
+    passed_rows=[]
     #prepare data
-    if cl=='I':
-        pipeline=tfold_pipeline.pipeline_i
-        df['tails_all']=df['pep'].map(lambda x: nn_utils.generate_registers_I(len(x)))
+    for i, row in df.iterrows():
+        try:
+            if cl == 'I':
+                row['tails_all'] = nn_utils.generate_registers_I(len(row['pep']))
+            else:
+                row['tails_all'] = nn_utils.generate_registers_II(len(row['pep']))
+
+            row['logkd_all'] = []
+
+            inputs = (tfold_pipeline.pipeline_i if cl == 'I' else tfold_pipeline.pipeline_ii)(
+                pd.DataFrame([row]), mhc_as_obj=mhc_as_obj
+            )
+
+            passed_rows.append(row)
+
+        except AssertionError as e:
+            with open("assertion_failures.log", "a") as logf: # TODO
+                logf.write(f"Skipping row {i}, class={cl}, pep={row['pep']}: {e}\n")
+            continue  # skip just this row, move on to next
+
+    if passed_rows:
+        df = pd.DataFrame(passed_rows)
     else:
-        pipeline=tfold_pipeline.pipeline_ii
-        df['tails_all']=df['pep'].map(lambda x: nn_utils.generate_registers_II(len(x)))
-    df['logkd_all']=[[] for i in range(len(df))]
-    inputs=pipeline(df,mhc_as_obj=mhc_as_obj)         
+        raise AssertionError("No rows passed the preprocessing step; cannot run prediction.")
+    
     #prepare params and such
     params_dir=params_dir or (seqnn_obj_dir+'/params')
     weights_dir=weights_dir or (seqnn_obj_dir+'/weights')    
@@ -47,7 +67,7 @@ def predict(df,cl,mhc_as_obj=False,model_list=None,params_dir=None,weights_dir=N
     #do inference    
     #use logkd, not kd in names!    
     model_list_full=list(params_all.keys())
-    print(f'making Kd predictions for {len(df)} pmhcs...')
+    print(f'Making Kd predictions for {len(df)} pMHCs.')
     for k in model_list_full:
         params=params_all[k]
         model_func=getattr(tfold_models,params['model'])        

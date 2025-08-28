@@ -1,3 +1,4 @@
+import logging
 import pickle
 import numpy as np
 import pandas as pd
@@ -91,10 +92,16 @@ def _make_af_inputs_for_one_entry(x,use_mhc_msa,use_paired_msa,tile_registers):
     pep_len=len(x['pep'])
     templates_processed={}
     for tails in x['templates'].columns:
-        if x['class']=='I':
-            pdbnum=template_tools._make_pep_pdbnums_I(pep_len,*tails)
-        else:
-            pdbnum=template_tools._make_pep_pdbnums_II(pep_len,tails[0])
+        try:
+            if x['class']=='I':
+                pdbnum=template_tools._make_pep_pdbnums_I(pep_len,*tails)
+            else:
+                pdbnum=template_tools._make_pep_pdbnums_II(pep_len,tails[0])
+        except AssertionError as e:
+            # Drop this column from the dataframe
+            x['templates'] = x['templates'].drop(columns=[tails])
+            # Continue to next column
+            continue
         pep_query=seq_tools.NUMSEQ(seq=x['pep'],pdbnum=pdbnum)        
         z=x['templates'][tails].map(lambda y: template_tools.make_template_hit(x['class'],y,pep_query,mhc_A_query,mhc_B_query))        
         for w in z: #add tail info
@@ -119,51 +126,55 @@ def _make_af_inputs_for_one_entry(x,use_mhc_msa,use_paired_msa,tile_registers):
     inputs=[]
     input_id=0
     for run in templates_by_run:
-        #collect tails and scores
-        tails=set()
-        best_mhc_score=1000
-        best_score=1000
-        scores=[]
-        for r in run:
-            tails.add(r['tails'])
-            best_mhc_score=min(best_mhc_score,r['mhc_score'])
-            best_score=min(best_score,r['score'])
-        tails=list(tails)
-        #renumber list: use pdbnum from random template within run
-        t0=run[np.random.randint(len(run))]['tails']
-        if x['class']=='I':
-            pdbnum=template_tools._make_pep_pdbnums_I(pep_len,t0[0],t0[1]) 
-        else:
-            pdbnum=template_tools._make_pep_pdbnums_II(pep_len,t0[0])
-        renumber_list=['P'+a for a in pdbnum]+renumber_list_mhc
-        #paired msa
-        msas_pmhc=[]
-        if use_paired_msa and (len(tails)==1): #only use when there is one register in the run
-            try:
-                pmhc_msa_parts=[_get_pmhc_msa_filenames(x['class'],'P',pdbnum),
-                                _get_pmhc_msa_filenames(x['class'],'M',mhc_A_query.data['pdbnum'])]                
-                if x['class']=='II':
-                    pmhc_msa_parts.append(_get_pmhc_msa_filenames(x['class'],'N',mhc_B_query.data['pdbnum']))                               
-                msas_pmhc+=[{i:f for i,f in enumerate(pmhc_msa_parts)}] #{0:pep,1:M,2:N}
-            except Exception as e:
-                print(f'paired MSA not available: {e}')
-        msas=msas_mhc+msas_pmhc
-        #make input
-        input_data={}
-        input_data['sequences']=sequences
-        input_data['msas']=msas
-        input_data['template_hits']=[r['template_hit'] for r in run]
-        input_data['renumber_list']=renumber_list
-        input_data['target_id']=x['pmhc_id']      #pmhc id of query: add from index if not present!            
-        input_data['current_id']=input_id
-        input_id+=1
-        #additional info (not used by AlphaFold)        
-        input_data['registers']=tails
-        input_data['best_mhc_score']=best_mhc_score
-        input_data['best_score']=best_score
-        if 'pdb_id' in x:
-            input_data['true_pdb']=x['pdb_id'] #pdb_id of true structure, if given
-        inputs.append(input_data)
+        try:
+            #collect tails and scores
+            tails=set()
+            best_mhc_score=1000
+            best_score=1000
+            scores=[]
+            for r in run:
+                tails.add(r['tails'])
+                best_mhc_score=min(best_mhc_score,r['mhc_score'])
+                best_score=min(best_score,r['score'])
+            tails=list(tails)
+            #renumber list: use pdbnum from random template within run
+            t0=run[np.random.randint(len(run))]['tails']    
+            if x['class']=='I':
+                pdbnum=template_tools._make_pep_pdbnums_I(pep_len,t0[0],t0[1]) 
+            else:
+                pdbnum=template_tools._make_pep_pdbnums_II(pep_len,t0[0])
+            renumber_list=['P'+a for a in pdbnum]+renumber_list_mhc
+            #paired msa
+            msas_pmhc=[]
+            if use_paired_msa and (len(tails)==1): #only use when there is one register in the run
+                try:
+                    pmhc_msa_parts=[_get_pmhc_msa_filenames(x['class'],'P',pdbnum),
+                                    _get_pmhc_msa_filenames(x['class'],'M',mhc_A_query.data['pdbnum'])]                
+                    if x['class']=='II':
+                        pmhc_msa_parts.append(_get_pmhc_msa_filenames(x['class'],'N',mhc_B_query.data['pdbnum']))                               
+                    msas_pmhc+=[{i:f for i,f in enumerate(pmhc_msa_parts)}] #{0:pep,1:M,2:N}
+                except Exception as e:
+                    print(f'paired MSA not available: {e}')
+            msas=msas_mhc+msas_pmhc
+            #make input
+            input_data={}
+            input_data['sequences']=sequences
+            input_data['msas']=msas
+            input_data['template_hits']=[r['template_hit'] for r in run]
+            input_data['renumber_list']=renumber_list
+            input_data['target_id']=x['pmhc_id']      #pmhc id of query: add from index if not present!            
+            input_data['current_id']=input_id
+            input_id+=1
+            #additional info (not used by AlphaFold)        
+            input_data['registers']=tails
+            input_data['best_mhc_score']=best_mhc_score
+            input_data['best_score']=best_score
+            if 'pdb_id' in x:
+                input_data['true_pdb']=x['pdb_id'] #pdb_id of true structure, if given
+            inputs.append(input_data)
+        except AssertionError as e:
+            # Continue to next run
+            continue
     return {'inputs':inputs,'class':x['class'],'tails':all_tails}
 
 def run_seqnn(df,use_seqnnf=False): 
