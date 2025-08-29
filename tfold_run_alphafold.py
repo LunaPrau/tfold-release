@@ -70,6 +70,7 @@ flags.DEFINE_integer('random_seed', None, 'The random seed for the data '
                      'that even if this is set, Alphafold may still not be '
                      'deterministic, because processes like GPU inference are '
                      'nondeterministic.')
+flags.DEFINE_integer('skip', 0, 'Number of input entries to skip from the start')
 FLAGS = flags.FLAGS
 
 MAX_TEMPLATE_HITS=20            #default 20; later reduced to 4 anyway (?)
@@ -262,12 +263,16 @@ def main(argv):
         with open(FLAGS.inputs,'rb') as f:
             inputs=pickle.load(f) #list of dicts [{param_name : value_for_input_0},..]
 
-
         # OOM-saving edits: split input into smaller chunks if too many
         # For safety, default chunk size = 1 (process one input at a time)
         CHUNK_SIZE = 10 # lower this if memory issues persist
         if len(inputs) == 0:
             raise ValueError('input list of zero length provided')
+        
+        skip=FLAGS.skip+1
+        if skip > 0:
+            logging.info(f"Skipping first {skip} inputs...")
+            inputs = inputs[skip:]
         
         # break inputs into smaller lists
         input_chunks = [inputs[i:i+CHUNK_SIZE] for i in range(0, len(inputs), CHUNK_SIZE)]
