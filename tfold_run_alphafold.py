@@ -50,6 +50,7 @@ import jax.numpy as jnp
 
 from collections import Counter
 from pprint import pformat
+import gc
 
 # Internal import (7716).
 
@@ -159,6 +160,10 @@ def predict_structure(sequences, msas, template_hits, renumber_list,
                 feature_dict, random_seed=model_random_seed
             )
             timings[f'alphafold_features.{model_name}'] = time.time() - t
+            
+            # OOM-saving edits: free feature_dict once processed_feature_dict is created
+            del feature_dict
+            gc.collect()
 
             # Inference
             t = time.time()
@@ -234,6 +239,10 @@ def predict_structure(sequences, msas, template_hits, renumber_list,
 
             timings[f'process_pdb.{model_name}'] = time.time() - t
 
+            # OOM-saving edits: free large intermediates after saving
+            del processed_feature_dict, prediction_result, unrelaxed_protein, unrelaxed_pdb
+            gc.collect()
+
         except Exception as e:
             with open(os.path.join(parent_output_dir, "per_model_failures.log"), "a") as logf:
                 logf.write(f"[target={target_id}, run={current_id}, model={model_name}] failed: {repr(e)}\n")
@@ -249,14 +258,23 @@ def predict_structure(sequences, msas, template_hits, renumber_list,
 
 def main(argv):
     try:
-        t_start=time.time()    
+        t_start=time.time()
         with open(FLAGS.inputs,'rb') as f:
-            inputs=pickle.load(f)            #list of dicts [{param_name : value_for_input_0},..]     
-        if len(inputs)==0:
+            inputs=pickle.load(f) #list of dicts [{param_name : value_for_input_0},..]
+
+
+        # OOM-saving edits: split input into smaller chunks if too many
+        # For safety, default chunk size = 1 (process one input at a time)
+        CHUNK_SIZE = 10 # lower this if memory issues persist
+        if len(inputs) == 0:
             raise ValueError('input list of zero length provided')
+        
+        # break inputs into smaller lists
+        input_chunks = [inputs[i:i+CHUNK_SIZE] for i in range(0, len(inputs), CHUNK_SIZE)]
+
         output_dir=FLAGS.output_dir
         parent_output_dir=os.path.dirname(output_dir)
-        logging.info(f'processing {len(inputs)} inputs...')
+        logging.info(f'processing {len(inputs)} inputs in {len(input_chunks)} chunks...')
         #set parameters#   
         params=af_params #from tfold.config
         num_ensemble      =params['num_ensemble']   
@@ -305,6 +323,9 @@ def main(argv):
                     model_runners=model_runners, benchmark=FLAGS.benchmark,
                     random_seed=random_seed, true_pdb=true_pdb
                 )
+                # OOM-saving edits: free memory after each input is processed
+                del sequences, msas, template_hits, renumber_list, target_id, current_id, true_pdb
+                gc.collect()
             except Exception as e:
                 failed_any = True
                 # robust logging even if paths missing
