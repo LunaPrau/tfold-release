@@ -6,3 +6,4 @@ __pycache__/
 data.tar.gz
 md5sums.txt
 seq_tools_tmp_dir/
+model_parse_failures.log
