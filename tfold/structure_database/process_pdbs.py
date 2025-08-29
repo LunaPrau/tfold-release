@@ -187,6 +187,8 @@ def process_chain(chain,require_mhc_for_pep=True):
             query=chain.get_fragment_by_i(il,ir)
             try:                
                 mhc,il0,ir0=seq_tools.mhc_from_seq(query.seq().upper(),return_boundaries=True)
+                if (mhc,il0,ir0) == (None,None,None):
+                    continue
                 source=query.get_fragment_by_i(il0,ir0)
                 if mhc.seq()!=source.seq().upper():
                     raise ValueError('MHC-source seq mismatch!')

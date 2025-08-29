@@ -2,6 +2,7 @@ import logging
 import pickle
 import numpy as np
 import pandas as pd
+import os
 
 import tfold.config
 import tfold.utils.seq_tools as seq_tools
@@ -177,19 +178,19 @@ def _make_af_inputs_for_one_entry(x,use_mhc_msa,use_paired_msa,tile_registers):
             continue
     return {'inputs':inputs,'class':x['class'],'tails':all_tails}
 
-def run_seqnn(df,use_seqnnf=False): 
+def run_seqnn(df,working_dir,use_seqnnf=False): 
     '''
     takes a dataframe with fields "class" (I or II), 
     '''
     df1=df[df['class']=='I']
     if len(df1)>0:
-        df1=nn_predict.predict(df1,'I',mhc_as_obj=True)
+        df1=nn_predict.predict(df1,working_dir,'I',mhc_as_obj=True)
     df2=df[df['class']=='II']
     if len(df2)>0:
         if use_seqnnf:       
-            df2=nn_predict.predict(df2,'II',mhc_as_obj=True,model_list=[(33,)])
+            df2=nn_predict.predict(df2,working_dir,'II',mhc_as_obj=True,model_list=[(33,)])
         else:
-            df2=nn_predict.predict(df2,'II',mhc_as_obj=True)        
+            df2=nn_predict.predict(df2,working_dir,'II',mhc_as_obj=True)        
     return pd.concat([df1,df2])
 
 def map_one_mhc_allele(a):
@@ -233,9 +234,7 @@ def map_one_mhc_seq(s):
         except Exception:
             raise ValueError(f'Cannot align MHC sequence {s}.')
         mhc_b,bl,br=None,None,None
-    a_boundary=f"{str(al)}:{str(ar)}"
-    b_boundary=f"{str(bl)}:{str(br)}"
-    return mhc_a,a_boundary,mhc_b,b_boundary,cl
+    return mhc_a,al,ar,mhc_b,bl,br,cl
 
 def prepare_mhc_objects(df):
     if 'MHC_sequence' in df:
@@ -246,9 +245,9 @@ def prepare_mhc_objects(df):
         f,k=map_one_mhc_allele,'MHC allele'  
     else:
         raise ValueError('Cannot find columns "MHC allele" or "MHC sequence" or "MHC_sequence" in input data.')
-    df[['mhc_a','mhc_a_boundary','mhc_b','mhc_b_boundary','class']]=df[k].map(f).tolist()
+    df[['mhc_a','mhc_a_boundary_left','mhc_a_boundary_right','mhc_b','mhc_b_boundary_left','mhc_b_boundary_right','class']]=df[k].map(f).tolist()
 
-def preprocess_df(df,mhc_as_obj=False,use_seqnnf=False):
+def preprocess_df(df,working_dir,mhc_as_obj=False,use_seqnnf=False):
     '''
     takes a df with columns "pep", "MHC allele" or "MHC_sequence";
     adds pmhc_id if not present;
@@ -258,14 +257,53 @@ def preprocess_df(df,mhc_as_obj=False,use_seqnnf=False):
     df=df.copy()
     if 'pmhc_id' not in df.columns: #assign ids
         df['pmhc_id']=df.index.copy()
-    if not mhc_as_obj:
-        prepare_mhc_objects(df)
-    else:
-        print('MHC objects from columns mhc_a and mhc_b will be used.')
-    df=run_seqnn(df,use_seqnnf=use_seqnnf)
-    return df
+    # Avoid crashing the whole dataframe if one row fails
+    valid_rows = []
+    for _, row in df.iterrows():
+        pmhc_id = row.get("pmhc_id", "unknown")
+        try:
+            # Add MHC objects
+            if not mhc_as_obj:
+                mhc_a, a_boundary_left, a_boundary_right, mhc_b, b_boundary_left, b_boundary_right, cl = (
+                    map_one_mhc_seq(row["MHC_sequence"]) if "MHC_sequence" in row else
+                    map_one_mhc_allele(row["MHC allele"])
+                )
+                if (mhc_a, a_boundary_left, a_boundary_right, mhc_b, b_boundary_left, b_boundary_right, cl) == (None, None, None, None, None, None, None):
+                    continue
+                row["mhc_a"], row["mhc_a_boundary_left"], row["mhc_a_boundary_right"] = mhc_a, a_boundary_left, a_boundary_right
+                row["mhc_b"], row["mhc_b_boundary_left"], row["mhc_b_boundary_right"] = mhc_b, b_boundary_left, b_boundary_right
+                row["class"] = cl
+            valid_rows.append(row)
+        except Exception as e:
+            print(f"tfold/modeling/make_inputs.py [preprocess_df] failed row pmhc_id={pmhc_id}: {e}")
+            if working_dir:
+                outdir = os.path.join(working_dir, "outputs", str(pmhc_id))
+                os.makedirs(outdir, exist_ok=True)
+                with open(os.path.join(outdir, "failed.txt"), "w") as f:
+                    f.write(str(e))
+            continue
+    df_valid = pd.DataFrame(valid_rows)
+
+    # SeqNN prediction row-wise
+    processed = []
+    for _, row in df_valid.iterrows():
+        pmhc_id = row["pmhc_id"]
+        try:
+            cl = row["class"]
+            tmp_df = pd.DataFrame([row])
+            row_pred = nn_predict.predict(tmp_df,working_dir,cl,mhc_as_obj=True,
+                                          model_list=[(33,)] if (cl=="II" and use_seqnnf) else None)
+            processed.append(row_pred.iloc[0])
+        except Exception as e:
+            print(f"[run_seqnn] Failed SeqNN for pmhc_id={pmhc_id}: {e}")
+            if working_dir:
+                outdir = os.path.join(working_dir, "outputs", str(pmhc_id))
+                os.makedirs(outdir, exist_ok=True)
+                with open(os.path.join(outdir, "failed.txt"), "a") as f:
+                    f.write(f"SeqNN failed: {e}\n")
+    return pd.DataFrame(processed)
     
-def make_inputs(df,params={},date_cutoff=None,print_stats=False):
+def make_inputs(df,working_dir,params={},date_cutoff=None,print_stats=False):
     '''
     takes df with fields: class, pep (str for pep seq), mhc_a (mhc_b) (NUMSEQ objects),
     mhc_a(b)_boundary_left and mhc_a(b)_boundary_right (int),
@@ -276,40 +314,54 @@ def make_inputs(df,params={},date_cutoff=None,print_stats=False):
     returns a list of AF inputs; if print_stats, prints total runs, reg/target and runs/target histograms for cl 1 and 2
     '''    
     if not params:
-        params=tfold.config.af_input_params                 
-    #prefilter registers by predicted Kd
-    df['tails_prefiltered']=df.apply(lambda x: _prefilter_registers(x['seqnn_logkds_all'],params[x['class']]['kd_threshold']),axis=1)
-    #assign templates        
-    df['templates']=df.apply(lambda x: template_tools.assign_templates(
-                                                x['class'],x['pep'],pep_tails=x['tails_prefiltered'],
-                                                mhc_A=x['mhc_a'].data,mhc_B=_mhcb(x),
-                                                templates_per_register=params[x['class']]['templates_per_register'],
-                                                pep_gap_penalty=params[x['class']]['pep_gap_penalty'],
-                                                mhc_cutoff=params[x['class']]['mhc_cutoff'],
-                                                shuffle=params[x['class']]['shuffle'],
-                                                pdbs_exclude=_exclude_pdbs(x),date_cutoff=date_cutoff,
-                                                score_cutoff=params[x['class']]['score_cutoff'],
-                                                pep_score_cutoff=params[x['class']].get('pep_score_cutoff'))
-                              ,axis=1)       
-    #add pmhc_id if not present (used by AF for naming output files)
-    if 'pmhc_id' not in df:
-        df['pmhc_id']=df.index
-    #make AF inputs (incl. split templates)                                                               
-    inputs_dicts=df.apply(lambda x:_make_af_inputs_for_one_entry(x,params[x['class']]['use_mhc_msa'],
-                                                                 params[x['class']]['use_paired_msa'],                                                                                                      params[x['class']]['tile_registers']),axis=1)    
-    inputs=[]
-    reg_counts={'I':[],'II':[]}
-    run_counts={'I':[],'II':[]}
-    for x in inputs_dicts.values:        
-        inputs+=x['inputs']
-        reg_counts[x['class']].append(len(x['tails']))
-        run_counts[x['class']].append(len(x['inputs']))    
+        params=tfold.config.af_input_params
+    
+    # Avoid crashing the whole dataframe if one row fails
+    reg_counts = {'I': [], 'II': []}
+    run_counts = {'I': [], 'II': []}
+
+    inputs = []
+    for _, row in df.iterrows():
+        pmhc_id = row.get("pmhc_id", "unknown")
+        try:
+            row['tails_prefiltered'] = _prefilter_registers(
+                row['seqnn_logkds_all'], params[row['class']]['kd_threshold']
+            )
+            row['templates'] = template_tools.assign_templates(
+                row['class'], row['pep'], pep_tails=row['tails_prefiltered'],
+                mhc_A=row['mhc_a'].data, mhc_B=_mhcb(row),
+                templates_per_register=params[row['class']]['templates_per_register'],
+                pep_gap_penalty=params[row['class']]['pep_gap_penalty'],
+                mhc_cutoff=params[row['class']]['mhc_cutoff'],
+                shuffle=params[row['class']]['shuffle'],
+                pdbs_exclude=_exclude_pdbs(row), date_cutoff=date_cutoff,
+                score_cutoff=params[row['class']]['score_cutoff'],
+                pep_score_cutoff=params[row['class']].get('pep_score_cutoff')
+            )
+            inp_dict = _make_af_inputs_for_one_entry(
+                row, params[row['class']]['use_mhc_msa'],
+                params[row['class']]['use_paired_msa'],
+                params[row['class']]['tile_registers']
+            )
+            inputs += inp_dict['inputs']
+            reg_counts[row['class']].append(len(inp_dict['tails']))
+            run_counts[row['class']].append(len(inp_dict['inputs']))
+        except Exception as e:
+            print(f"[make_inputs] Failed pmhc_id={pmhc_id}: {e}")
+            if working_dir:
+                outdir = os.path.join(working_dir, "outputs", str(pmhc_id))
+                os.makedirs(outdir, exist_ok=True)
+                with open(os.path.join(outdir, "failed.txt"), "a") as f:
+                    f.write(f"make_inputs failed: {e}\n")
+            continue
+
     if print_stats:
-        for cl in ['I','II']:
+        for cl in ['I', 'II']:
             if reg_counts[cl]:
-                queries, runs=np.sum(df['class']==cl), sum(run_counts[cl])
-                registers=sum(reg_counts[cl])
-                print(f'class {cl}:')
-                print('pmhcs: {:3d}; runs: {:4d}, runs per pmhc: av {:3.1f}, max {:2d}; registers per pmhc: av {:3.1f}, max {:2d}'.format(
-                       queries,runs,runs/queries,max(run_counts[cl]),registers/queries,max(reg_counts[cl])))                 
+                queries = np.sum(df['class'] == cl)
+                runs = sum(run_counts[cl])
+                registers = sum(reg_counts[cl])
+                print(f'class {cl}: pmhcs={queries}, runs={runs}, runs/pmhc={runs/queries:.1f}, '
+                      f'max runs={max(run_counts[cl])}, registers/pmhc={registers/queries:.1f}, '
+                      f'max registers={max(reg_counts[cl])}')
     return inputs

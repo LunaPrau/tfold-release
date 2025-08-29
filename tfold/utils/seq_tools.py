@@ -10,6 +10,7 @@ import pickle
 import pandas as pd
 import time
 import re
+import sys
 
 from tfold import config
 from tfold.utils import utils
@@ -306,7 +307,7 @@ class NUMSEQ():
             else:
                 i_right=len(seq)
             for i in range(len(self.data)):
-                if (which=='right' and i>=n_right) or (which=='left' and i<n_left) or (which=='all'):
+                if (which=='right' and i>=i_right) or (which=='left' and i<i_left) or (which=='all'):
                     data[i]['seq']=data[i]['seq'].upper()
         #repair other gaps        
         gaps=self.info['gaps'].copy()
@@ -430,7 +431,14 @@ def blast_prot(seq,dbs=['B2M','MHC','TRV','TRJ'],species=None):
     hits=[]
     for db in dbs_full:
         blastp_cline=NcbiblastpCommandline(query=query_path, db=db,outfmt=5, out=output_path)
-        stdout,stderr=blastp_cline()
+        try:
+            stdout,stderr=blastp_cline()
+        except Exception as e:
+            # This might catch cases where the executable is missing.
+            print("ERROR: The 'blastp' command was not found.")
+            print(f"Details: {e}")
+            print("Please check that the NCBI BLAST+ suite is installed and 'blastp' is in your system's PATH.")
+            sys.exit(1)
         #parse blastp output
         with open(output_path,'r') as f:
             blast_record=NCBIXML.read(f)        
@@ -518,35 +526,41 @@ def realign(seq,target,name=''):
     realign sequence and NUMSEQ object;
     symbols X (also B,Z) accepted and have standard blosum62 scores
     '''
-    #lower penalty for gap in query (assume missing res possible), high penalty for gap in target
-    y=pairwise2.align.globaldd(seq,target.seq(),blosum62,
-                               openA=-5,extendA=-5,openB=-15,extendB=-15,penalize_end_gaps=(False,False),
-                               one_alignment_only=True)[0]            
-    seqA,seqB=y.seqA,y.seqB    
-    if re.search('[A-Z]-+[A-Z]',seqB):
-        raise ValueError(f'internal gap in aligned target for {name}')   
-    #indices of proper target within alignment
-    x=re.search('^-+',seqB)
-    if x:
-        i1=x.end()
-    else:
-        i1=0        
-    x=re.search('-+$',seqB)
-    if x:
-        i2=x.start()
-    else:
-        i2=len(seqB)        
-    #find start and end positions of alignment within query [i_start,i_end)
-    i_start=i1
-    i_end=len(seq)-(len(seqB)-i2)            
-    #cut to aligned target
-    seqA,seqB=seqA[i1:i2],seqB[i1:i2]           
-    #identify and make mutations
-    mutations=_find_mutations(seqA,seqB,target.data['pdbnum'])    
-    result,error=target.mutate(mutations)
-    if error:
-        raise ValueError(f'mutation error {error} for {name}')
-    return result,i_start,i_end
+    try:
+        #lower penalty for gap in query (assume missing res possible), high penalty for gap in target
+        y=pairwise2.align.globaldd(seq,target.seq(),blosum62,
+                                openA=-5,extendA=-5,openB=-15,extendB=-15,penalize_end_gaps=(False,False),
+                                one_alignment_only=True)[0]            
+        seqA,seqB=y.seqA,y.seqB    
+        if re.search('[A-Z]-+[A-Z]',seqB):
+            
+            raise ValueError(f'internal gap in aligned target for {name}')   
+        #indices of proper target within alignment
+        x=re.search('^-+',seqB)
+        if x:
+            i1=x.end()
+        else:
+            i1=0        
+        x=re.search('-+$',seqB)
+        if x:
+            i2=x.start()
+        else:
+            i2=len(seqB)        
+        #find start and end positions of alignment within query [i_start,i_end)
+        i_start=i1
+        i_end=len(seq)-(len(seqB)-i2)            
+        #cut to aligned target
+        seqA,seqB=seqA[i1:i2],seqB[i1:i2]           
+        #identify and make mutations
+        mutations=_find_mutations(seqA,seqB,target.data['pdbnum'])    
+        result,error=target.mutate(mutations)
+        if error:
+            raise ValueError(f'mutation error {error} for {name}')
+        return result,i_start,i_end
+    except Exception as e:
+        # Graceful failure: print error and return None
+        print(f"[{name}] Alignment failed: {repr(e)}\n")
+        return None, None, None
 
 ######################### SPECIES INFO #########################
 with open(data_dir+'/species_dict.pckl','rb') as f:

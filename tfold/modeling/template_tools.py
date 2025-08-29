@@ -66,23 +66,29 @@ def _tcr_edit_distance(tcr1,tcr2):
     tcr_seq1=''.join(tcr1['obj']['data']['seq'])
     tcr_seq2=''.join(tcr2['obj']['data']['seq'])
     return edit_distance(tcr_seq1,tcr_seq2)    
-def protein_edit_distances_all(inputs,output_dir,proteins,pdb_dir):
-    #load pmhc/tcr records    
+def protein_edit_distances_all(inputs, output_dir, proteins, pdb_dir):
+    # load pmhc/tcr records
     if proteins not in ['pmhcs','tcrs']:
         raise ValueError(f'protein {proteins} not understood;')
     with open(f'{pdb_dir}/{proteins}.pckl','rb') as f:
-        proteins_data=pickle.load(f)
+        proteins_data = pickle.load(f)
     print(f'protein records {proteins} of len {len(proteins_data)}')
-    if proteins=='pmhcs':
-        dist_func=_pmhc_edit_distance
-    elif proteins=='tcrs':
-        dist_func=_tcr_edit_distance
-    distances={}
+
+    dist_func = _pmhc_edit_distance if proteins == 'pmhcs' else _tcr_edit_distance
+    distances = {}
     for x in inputs:
-        a,b=int(x[0]),int(x[1])
-        distances[a,b]=dist_func(proteins_data[a],proteins_data[b])
-    with open(output_dir+f'/d_{a}_{b}.pckl','wb') as f:
-        pickle.dump(distances,f)     
+        try:
+            a, b = int(x[0]), int(x[1])
+            distances[a, b] = dist_func(proteins_data[a], proteins_data[b])
+        except Exception as e:
+            with open("distance_failures.log", "a") as logf:
+                logf.write(f"Failed distance for pair {x}: {repr(e)}\n")
+            continue
+
+    if distances:
+        (a, b), _ = next(iter(distances.items()))
+        with open(output_dir + f'/d_{a}_{b}.pckl','wb') as f:
+            pickle.dump(distances, f)
         
 ##### tools for template assignment #####       
 
@@ -148,67 +154,85 @@ def assign_templates(cl,pep_seq,pep_tails,mhc_A,mhc_B=None,templates_per_registe
     then no more than templates_per_register templates are assigned for each register;
     each CA cluster is allowed no more than once per register
     '''    
-    if cl=='I':
-        mhc_data=mhc_A
+    if cl == 'I':
+        mhc_data = mhc_A
     else:
-        mhc_data=np.concatenate((mhc_A,mhc_B))    
-    mhc_matrix=data_to_matrix(mhc_data,mhc_pdbnums_template[cl])
-    mhc_scores=np.sum(np.any(template_data[cl]['mhc_data']-mhc_matrix,axis=2).astype(int),axis=1)        
-    #exclude by date, pdb_id, mhc_score
-    ind_keep=np.array([True for i in range(len(mhc_scores))])
-    x=template_info[cl]
+        mhc_data = np.concatenate((mhc_A, mhc_B))
+
+    mhc_matrix = data_to_matrix(mhc_data, mhc_pdbnums_template[cl])
+    mhc_scores = np.sum(
+        np.any(template_data[cl]['mhc_data'] - mhc_matrix, axis=2).astype(int),
+        axis=1
+    )
+
+    # exclude by date, pdb_id, mhc_score
+    ind_keep = np.array([True] * len(mhc_scores))
+    x = template_info[cl]
     if date_cutoff:
-        ind_keep&=(x['date']<date_cutoff).values
-    if pdbs_exclude:           
-        ind_keep&=~x['pdb_id_short'].isin(pdbs_exclude)
+        ind_keep &= (x['date'] < date_cutoff).values
+    if pdbs_exclude:
+        ind_keep &= ~x['pdb_id_short'].isin(pdbs_exclude)
     if mhc_cutoff:
-        ind_keep&=((mhc_scores-np.min(mhc_scores[ind_keep]))<=mhc_cutoff)        
-    #pep pdbnums   
-    pep_len=len(pep_seq)
-    if cl=='I':
-        c_pep_pdbnums = []
-        for x in pep_tails:
+        ind_keep &= ((mhc_scores - np.min(mhc_scores[ind_keep])) <= mhc_cutoff)
+
+    # peptide pdbnums
+    pep_len = len(pep_seq)
+    c_pep_pdbnums = []
+    if cl == 'I':
+        for t in pep_tails:
             try:
-                c_pep_pdbnums.append((x,_make_pep_pdbnums_I(pep_len,x[0],x[1])))
-            except AssertionError as e:
-                # Continue to next run
+                c_pep_pdbnums.append((t, _make_pep_pdbnums_I(pep_len, t[0], t[1])))
+            except AssertionError:
                 continue
-    else:        
-        c_pep_pdbnums = []
-        for x in pep_tails:
+    else:
+        for t in pep_tails:
             try:
-                c_pep_pdbnums.append((x,_make_pep_pdbnums_II(pep_len,x[0])))
-            except AssertionError as e:
-                # Continue to next run
+                c_pep_pdbnums.append((t, _make_pep_pdbnums_II(pep_len, t[0])))
+            except AssertionError:
                 continue
-    templates_assigned={}
-    for tails,pdbnum in c_pep_pdbnums:
-        pep_data=seq_tools.NUMSEQ(seq=pep_seq,pdbnum=pdbnum).data
-        pep_matrix=data_to_matrix(pep_data,pep_pdbnums_template[cl])    
-        pep_scores=np.sum(np.any(template_data[cl]['pep_data']-pep_matrix,axis=2).astype(int),axis=1)
-        total_scores=mhc_scores+pep_scores+pep_gap_penalty*template_info[cl]['pep_gaps']
+
+    templates_assigned = {}
+    for tails, pdbnum in c_pep_pdbnums:
+        pep_data = seq_tools.NUMSEQ(seq=pep_seq, pdbnum=pdbnum).data
+        pep_matrix = data_to_matrix(pep_data, pep_pdbnums_template[cl])
+        pep_scores = np.sum(
+            np.any(template_data[cl]['pep_data'] - pep_matrix, axis=2).astype(int),
+            axis=1
+        )
+        total_scores = mhc_scores + pep_scores + pep_gap_penalty * template_info[cl]['pep_gaps']
+
         if score_cutoff:
-            ind_keep1=ind_keep&(total_scores>score_cutoff)
+            ind_keep1 = ind_keep & (total_scores > score_cutoff)
         else:
-            ind_keep1=ind_keep 
+            ind_keep1 = ind_keep
         if pep_score_cutoff:
-            ind_keep1=ind_keep1&(pep_scores>pep_score_cutoff)        
-        ind=np.argsort(total_scores,kind='mergesort') #stable sort to preserve order for elements w. identical scores
-        cluster_CA_ids_used=set()        
-        templates_assigned[tails]=[]
+            ind_keep1 = ind_keep1 & (pep_scores > pep_score_cutoff)
+
+        if not np.any(ind_keep1):
+            templates_assigned[tails] = []
+            continue
+
+        ind = np.argsort(total_scores, kind='mergesort')
+        cluster_CA_ids_used = set()
+        templates_assigned[tails] = []
         for i in ind:
-            if ind_keep1[i]:                
-                x=template_info[cl].iloc[i]                
-                if x['cluster_CA'] not in cluster_CA_ids_used: #use one structure per CA cluster                    
-                    templates_assigned[tails].append({'pdb_id':x['pdb_id'],
-                                                      'pep_score':pep_scores[i],'mhc_score':mhc_scores[i],'pep_gaps':x['pep_gaps'],
-                                                      'score':total_scores[i]})
-                    cluster_CA_ids_used.add(x['cluster_CA'])
-                    if len(templates_assigned[tails])>=templates_per_register:
-                        break                   
-    templates_assigned=pd.DataFrame(templates_assigned) #same num templates per register
-    if shuffle:
-        templates_assigned=templates_assigned.sample(frac=1)
+            if ind_keep1[i]:
+                row = template_info[cl].iloc[i]
+                if row['cluster_CA'] not in cluster_CA_ids_used:
+                    templates_assigned[tails].append({
+                        'pdb_id': row['pdb_id'],
+                        'pep_score': pep_scores[i],
+                        'mhc_score': mhc_scores[i],
+                        'pep_gaps': row['pep_gaps'],
+                        'score': total_scores[i]
+                    })
+                    cluster_CA_ids_used.add(row['cluster_CA'])
+                    if templates_per_register and len(templates_assigned[tails]) >= templates_per_register:
+                        break
+
+    templates_assigned = pd.DataFrame(templates_assigned) if templates_assigned else pd.DataFrame()
+    if shuffle and not templates_assigned.empty:
+        templates_assigned = templates_assigned.sample(frac=1)
     return templates_assigned
     
 #turn templates into AF hits
@@ -255,32 +279,44 @@ def align_numseq(query,target):
     '''takes query and target NUMSEQ objects;
     returns dict with aligned query seq, target seq, indices query, indices target
     '''
-    pdbnum_x=list(query.data['pdbnum'])
-    pdbnum_y=list(target.data['pdbnum'])
-    pdbnum_joined=_interlace_lists(pdbnum_x,pdbnum_y)
-    indices_query=[]
-    indices_target=[]
-    query_seq=''
-    target_seq=''
-    iq,it=0,0
+    pdbnum_x = list(query.data['pdbnum'])
+    pdbnum_y = list(target.data['pdbnum'])
+    pdbnum_joined = _interlace_lists(pdbnum_x, pdbnum_y)
+
+    if not pdbnum_joined:
+        return None
+
+    indices_query = []
+    indices_target = []
+    query_seq = ''
+    target_seq = ''
+    iq, it = 0, 0
     for p in pdbnum_joined:
-        ind=np.nonzero(query.data['pdbnum']==p)[0]        
-        if len(ind)>0:
-            query_seq+=query.data['seq'][ind[0]]
+        ind = np.nonzero(query.data['pdbnum'] == p)[0]
+        if len(ind) > 0:
+            query_seq += query.data['seq'][ind[0]]
             indices_query.append(iq)
-            iq+=1
+            iq += 1
         else:
-            query_seq+='-'
+            query_seq += '-'
             indices_query.append(-1)
-        ind=np.nonzero(target.data['pdbnum']==p)[0] 
-        if len(ind)>0:
-            target_seq+=target.data['seq'][ind[0]]
+
+        ind = np.nonzero(target.data['pdbnum'] == p)[0]
+        if len(ind) > 0:
+            target_seq += target.data['seq'][ind[0]]
             indices_target.append(it)
-            it+=1
+            it += 1
         else:
-            target_seq+='-'
-            indices_target.append(-1)    
-    return {'query_seq':query_seq,'target_seq':target_seq,'indices_query':indices_query,'indices_target':indices_target}        
+            target_seq += '-'
+            indices_target.append(-1)
+
+    return {
+        'query_seq': query_seq,
+        'target_seq': target_seq,
+        'indices_query': indices_query,
+        'indices_target': indices_target
+    }
+
 def join_fragment_alignments(fragments):
     '''
     join multiple alignments into one
@@ -304,30 +340,47 @@ def make_template_hit(cl,x,pep_query,mhc_A_query,mhc_B_query=None):
     takes cl, dict x {'pdbid':..,...}, NUMSEQ objects for pep and mhc queries;
     returns a copy of dict x with added field 'template_hit' (AF formatted template hit)
     '''    
-    fragment_alignments=[]    
-    pdb_id=x['pdb_id']
-    summary_record=summary[pdb_id]    
-    pep_target=seq_tools.load_NUMSEQ(summary_record['P'])
-    pep_target=pep_target.ungap_small()
-    fragment_alignments.append(align_numseq(pep_query,pep_target))    
-    mhc_A_target=seq_tools.load_NUMSEQ(summary_record['M'])
-    mhc_A_target=mhc_A_target.ungap_small()
-    fragment_alignments.append(align_numseq(mhc_A_query,mhc_A_target))
-    if cl=='II':
-        mhc_B_target=seq_tools.load_NUMSEQ(summary_record['N'])
-        mhc_B_target=mhc_B_target.ungap_small()
-        fragment_alignments.append(align_numseq(mhc_B_query,mhc_B_target))    
-    hit=join_fragment_alignments(fragment_alignments)
-    template_hit={}
-    template_hit['index']=None #to be added when run inputs are assembled
-    template_hit['name']=pdb_id                
-    template_hit['aligned_cols']=len(hit['query_seq'])-hit['query_seq'].count('-')-hit['target_seq'].count('-')
-    template_hit['sum_probs']=1000-x['score']
-    template_hit['query']=hit['query_seq']
-    template_hit['hit_sequence']=hit['target_seq']
-    template_hit['indices_query']=hit['indices_query']
-    template_hit['indices_hit']=hit['indices_target']         
-    return {'template_hit':template_hit,**x}
+    try:
+        pdb_id = x['pdb_id']
+        summary_record = summary[pdb_id]
+    except KeyError:
+        with open("template_failures.log", "a") as logf:
+            logf.write(f"Missing summary for template {x.get('pdb_id')}\n")
+        return None
+
+    fragment_alignments = []
+
+    pep_target = seq_tools.load_NUMSEQ(summary_record['P']).ungap_small()
+    fa = align_numseq(pep_query, pep_target)
+    if fa is None:
+        return None
+    fragment_alignments.append(fa)
+
+    mhc_A_target = seq_tools.load_NUMSEQ(summary_record['M']).ungap_small()
+    fa = align_numseq(mhc_A_query, mhc_A_target)
+    if fa is None:
+        return None
+    fragment_alignments.append(fa)
+
+    if cl == 'II':
+        mhc_B_target = seq_tools.load_NUMSEQ(summary_record['N']).ungap_small()
+        fa = align_numseq(mhc_B_query, mhc_B_target)
+        if fa is None:
+            return None
+        fragment_alignments.append(fa)
+
+    hit = join_fragment_alignments(fragment_alignments)
+    template_hit = {
+        'index': None,
+        'name': pdb_id,
+        'aligned_cols': len(hit['query_seq']) - hit['query_seq'].count('-') - hit['target_seq'].count('-'),
+        'sum_probs': 1000 - x['score'],
+        'query': hit['query_seq'],
+        'hit_sequence': hit['target_seq'],
+        'indices_query': hit['indices_query'],
+        'indices_hit': hit['indices_target']
+    }
+    return {'template_hit': template_hit, **x}
             
 task_names={'distances':protein_edit_distances_all}
 if __name__=='__main__': 
