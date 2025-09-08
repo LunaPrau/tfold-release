@@ -9,6 +9,7 @@ import tfold.utils.seq_tools as seq_tools
 import tfold.nn.nn_predict as nn_predict
 import tfold.modeling.template_tools as template_tools
 template_tools.load_data(tfold.config.template_source_dir)
+from collections import defaultdict
 
 templates_per_run=4 #AF maximum
 
@@ -57,7 +58,7 @@ def _get_pmhc_msa_filenames(cl,chain,pdbnum):
         raise ValueError('pMHC MSA not precomputed for given class, chain and pdbnum')
     return tfold.config.data_dir+f'/msas/pMHC/{cl}_{chain}_{msa_id}.a3m'
 
-def _make_af_inputs_for_one_entry(x,use_mhc_msa,use_paired_msa,tile_registers):  
+def _make_af_inputs_for_one_entry(x,use_mhc_msa,use_paired_msa,tile_registers,MAX_MODELS_PER_TARGET,MAX_PER_REGISTER):  
     '''
     takes a Series x with entries: class, pep, mhc_a, (mhc_b), templates, pmhc_id, (pdb_id -- for true structure);
     also options for msa and register tiling;
@@ -176,7 +177,27 @@ def _make_af_inputs_for_one_entry(x,use_mhc_msa,use_paired_msa,tile_registers):
         except AssertionError as e:
             # Continue to next run
             continue
-    return {'inputs':inputs,'class':x['class'],'tails':all_tails}
+    
+    # Filtering templates by score to produce limited number of AF inputs per peptide-MHC sequence
+    # while maintaining diversity across registers
+    grouped = defaultdict(list)
+    for inp in inputs:
+        key = tuple(inp['registers'])
+        grouped[key].append(inp)
+
+    # sort within each register group by best_score
+    for reg, runs in grouped.items():
+        grouped[reg] = sorted(runs, key=lambda d: d['best_score'])[:MAX_PER_REGISTER]
+
+    # flatten groups
+    filtered = [d for runs in grouped.values() for d in runs]
+
+    # apply global cap if needed
+    if len(filtered) > MAX_MODELS_PER_TARGET:
+        filtered = sorted(filtered, key=lambda d: d['best_score'])[:MAX_MODELS_PER_TARGET]
+
+    kept_tails = [d['registers'] for d in filtered]
+    return {'inputs':filtered,'class':x['class'],'tails':kept_tails}
 
 def run_seqnn(df,working_dir,use_seqnnf=False): 
     '''
@@ -315,6 +336,8 @@ def make_inputs(df,working_dir,params={},date_cutoff=None,print_stats=False):
     '''    
     if not params:
         params=tfold.config.af_input_params
+    MAX_MODELS_PER_TARGET = params['common']['max_models_per_target']
+    MAX_PER_REGISTER = params['common']['max_per_register']
     
     # Avoid crashing the whole dataframe if one row fails
     reg_counts = {'I': [], 'II': []}
@@ -341,7 +364,8 @@ def make_inputs(df,working_dir,params={},date_cutoff=None,print_stats=False):
             inp_dict = _make_af_inputs_for_one_entry(
                 row, params[row['class']]['use_mhc_msa'],
                 params[row['class']]['use_paired_msa'],
-                params[row['class']]['tile_registers']
+                params[row['class']]['tile_registers'],
+                MAX_MODELS_PER_TARGET, MAX_PER_REGISTER
             )
             inputs += inp_dict['inputs']
             reg_counts[row['class']].append(len(inp_dict['tails']))
