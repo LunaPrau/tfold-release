@@ -68,6 +68,11 @@ af_input_params={'I':
                   'use_paired_msa':True, #added 2022-11-22 (discovery run_11)
                   'tile_registers':False,
                   'shuffle':False
+                 },
+                 'common':
+                 {
+                     'max_models_per_target': 5, # global cap across all registers
+                     'max_per_register': 5 # cap per register (diversity control)
                  }
                 }
 
