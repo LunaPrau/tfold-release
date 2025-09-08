@@ -59,6 +59,8 @@ logging.set_verbosity(logging.WARNING)
 import tfold_patch.tfold_pipeline as pipeline
 import tfold_patch.postprocessing as postprocessing
 
+import average_embeddings
+
 flags.DEFINE_string('inputs',None,'path to a .pkl input file with a list of inputs')
 flags.DEFINE_string('output_dir',None,'where to put outputs')
 flags.DEFINE_boolean('benchmark', False, 'Run multiple JAX model evaluations '
@@ -148,6 +150,7 @@ def predict_structure(sequences, msas, template_hits, renumber_list,
 
     num_models = len(model_runners)
     for model_index, (model_name, model_runner) in enumerate(model_runners.items()):
+        print("\n")
         print(f'Predicting target={target_id}, run={current_id}, model={model_name}')
         model_random_seed = model_index + random_seed * num_models
 
@@ -262,30 +265,37 @@ def main(argv):
         t_start=time.time()
         with open(FLAGS.inputs,'rb') as f:
             inputs=pickle.load(f) #list of dicts [{param_name : value_for_input_0},..]
-
-        # OOM-saving edits: split input into smaller chunks if too many
-        # For safety, default chunk size = 1 (process one input at a time)
-        CHUNK_SIZE = 10 # lower this if memory issues persist
         if len(inputs) == 0:
             raise ValueError('input list of zero length provided')
         
-        skip=FLAGS.skip+1
-        if skip > 0:
-            logging.info(f"Skipping first {skip} inputs...")
-            inputs = inputs[skip:]
-        
-        # break inputs into smaller lists
-        input_chunks = [inputs[i:i+CHUNK_SIZE] for i in range(0, len(inputs), CHUNK_SIZE)]
+        if FLAGS.skip:
+            skip=FLAGS.skip+1
+            if skip > 0:
+                logging.info(f"Skipping first {skip} inputs...")
+                inputs = inputs[skip:]
 
-        output_dir=FLAGS.output_dir
-        parent_output_dir=os.path.dirname(output_dir)
-        logging.info(f'processing {len(inputs)} inputs in {len(input_chunks)} chunks...')
-        #set parameters#   
-        params=af_params #from tfold.config
-        num_ensemble      =params['num_ensemble']   
-        model_names       =params['model_names']   
-        chain_break_shift =params['chain_break_shift']
-        ##################        
+        # OOM-saving edits: split input into smaller chunks if too many        
+        # group inputs by target_id
+        input_by_target = {}
+        for x in inputs:
+            target_id = str(x['target_id'])
+            if target_id not in input_by_target:
+                input_by_target[target_id] = []
+            input_by_target[target_id].append(x)
+        
+        # turn inputs into chunks of targets
+        input_target_chunks = list(input_by_target.values())
+        
+        output_dir = FLAGS.output_dir
+        parent_output_dir = os.path.dirname(output_dir)
+        logging.info(f'processing {len(inputs)} inputs grouped into {len(input_target_chunks)} target chunks...')
+
+        # set parameters
+        params = af_params
+        num_ensemble = params['num_ensemble']
+        model_names = params['model_names']
+        chain_break_shift = params['chain_break_shift']
+
         template_featurizer=templates.HhsearchHitFeaturizer(mmcif_dir=mmcif_dir,
                                                             max_template_date=MAX_TEMPLATE_DATE,
                                                             max_hits=MAX_TEMPLATE_HITS,
@@ -293,6 +303,7 @@ def main(argv):
                                                             release_dates_path=None,
                                                             obsolete_pdbs_path=None)
         data_pipeline=pipeline.DataPipeline(template_featurizer=template_featurizer,chain_break_shift=chain_break_shift)
+
         model_runners={}    
         for model_name in model_names:
             model_config=config.model_config(model_name)
@@ -301,57 +312,67 @@ def main(argv):
             model_runner=model.RunModel(model_config,model_params)
             model_runners[model_name]=model_runner
         logging.info('Have %d models: %s',len(model_runners),list(model_runners.keys()))
+
         random_seed=FLAGS.random_seed
         if random_seed is None:
             random_seed = random.randrange(sys.maxsize // len(model_names))
         logging.info('Using random seed %d for the data pipeline',random_seed)
-        print("\n")
-        first_target_id = inputs[0].get("target_id")
-        print(f'Target id: {first_target_id}')
-        print(f'Number of models to generate for this target: {len(inputs)}')
+        
         failed_any = False
-        for x in inputs:
-            try:
-                sequences        = x['sequences']
-                msas             = x['msas']
-                template_hits    = x['template_hits']
-                renumber_list    = x['renumber_list']
-                target_id        = str(x['target_id'])
-                current_id       = str(x['current_id'])
-                true_pdb         = x.get('true_pdb')
-                target_output_dir = os.path.join(output_dir, target_id)
 
-                predict_structure(
-                    sequences=sequences, msas=msas, template_hits=template_hits, renumber_list=renumber_list,
-                    target_id=target_id, current_id=current_id, parent_output_dir=parent_output_dir,
-                    target_output_dir=target_output_dir, data_pipeline=data_pipeline,
-                    model_runners=model_runners, benchmark=FLAGS.benchmark,
-                    random_seed=random_seed, true_pdb=true_pdb
-                )
-                # OOM-saving edits: free memory after each input is processed
-                del sequences, msas, template_hits, renumber_list, target_id, current_id, true_pdb
-                gc.collect()
-            except Exception as e:
-                failed_any = True
-                # robust logging even if paths missing
-                safe_parent = target_output_dir if 'target_output_dir' in locals() else parent_output_dir if 'parent_output_dir' in locals() else os.path.dirname(output_dir)
-                os.makedirs(safe_parent, exist_ok=True)
-                log_path = os.path.join(safe_parent, "alphafold_failures.log")
-                with open(log_path, "a") as logf:
-                    run = x.get('current_id', '?')
-                    tgt = x.get('target_id', '?')
-                    logf.write(f"[target={tgt}, run={run}] failed: {repr(e)}\n")
-                # also mark this run as failed
-                os.makedirs(output_dir, exist_ok=True)
-                failed_path = os.path.join(output_dir, "failed.txt")
-                with open(failed_path, "a") as f:
-                    run = x.get('current_id', '?')
-                    tgt = x.get('target_id', '?')
-                    f.write(f"{tgt}\t{run}\t{repr(e)}\n")
-                continue  # move on to next input
+        current_target_id = None
+        for target_chunk in input_target_chunks:
+            # Process one target at a time
+            first_entry = target_chunk[0]
+            current_target_id = str(first_entry['target_id'])
+            print(f'Processing target id: {current_target_id} with {len(target_chunk)} models to be generated.')
 
-        t_delta = (time.time() - t_start) / 60
-        print(f'Processed {len(inputs)} inputs in {t_delta:.2f} minutes.')
+            for x in target_chunk:
+                try:
+                    sequences        = x['sequences']
+                    msas             = x['msas']
+                    template_hits    = x['template_hits']
+                    renumber_list    = x['renumber_list']
+                    target_id        = str(x['target_id'])
+                    current_id       = str(x['current_id'])
+                    true_pdb         = x.get('true_pdb')
+                    target_output_dir = os.path.join(output_dir, target_id)
+
+                    predict_structure(
+                        sequences=sequences, msas=msas, template_hits=template_hits, renumber_list=renumber_list,
+                        target_id=target_id, current_id=current_id, parent_output_dir=parent_output_dir,
+                        target_output_dir=target_output_dir, data_pipeline=data_pipeline,
+                        model_runners=model_runners, benchmark=FLAGS.benchmark,
+                        random_seed=random_seed, true_pdb=true_pdb
+                    )
+                    # OOM-saving edits: free memory after each input is processed
+                    del sequences, msas, template_hits, renumber_list, target_id, current_id, true_pdb
+                    gc.collect()
+                except Exception as e:
+                    failed_any = True
+                    # robust logging even if paths missing
+                    safe_parent = target_output_dir if 'target_output_dir' in locals() else parent_output_dir if 'parent_output_dir' in locals() else os.path.dirname(output_dir)
+                    os.makedirs(safe_parent, exist_ok=True)
+                    log_path = os.path.join(safe_parent, "alphafold_failures.log")
+                    with open(log_path, "a") as logf:
+                        run = x.get('current_id', '?')
+                        tgt = x.get('target_id', '?')
+                        logf.write(f"[target={tgt}, run={run}] failed: {repr(e)}\n")
+                    # also mark this run as failed
+                    os.makedirs(output_dir, exist_ok=True)
+                    failed_path = os.path.join(output_dir, "failed.txt")
+                    with open(failed_path, "a") as f:
+                        run = x.get('current_id', '?')
+                        tgt = x.get('target_id', '?')
+                        f.write(f"{tgt}\t{run}\t{repr(e)}\n")
+                    continue  # move on to next run
+            
+            t_delta = (time.time() - t_start) / 60
+            print(f'Processed {len(inputs)} inputs in {t_delta:.2f} minutes.')
+
+            average_embeddings.main(output_dir, current_target_id)
+            print(f"Averaged embeddings for {current_target_id}.")
+
     except Exception as e:
         # Last-chance logger without assuming any locals exist
         base = os.path.dirname(FLAGS.output_dir) if FLAGS.output_dir else "."
