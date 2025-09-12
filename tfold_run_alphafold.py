@@ -59,7 +59,7 @@ logging.set_verbosity(logging.WARNING)
 import tfold_patch.tfold_pipeline as pipeline
 import tfold_patch.postprocessing as postprocessing
 
-import average_embeddings
+# import average_embeddings
 
 flags.DEFINE_string('inputs',None,'path to a .pkl input file with a list of inputs')
 flags.DEFINE_string('output_dir',None,'where to put outputs')
@@ -144,18 +144,15 @@ def predict_structure(sequences, msas, template_hits, renumber_list,
     timings['tfold_features'] = time.time() - t0
 
     # Save features once
-    features_output_path = os.path.join(target_output_dir, f'features_{current_id}.pkl')
-    with open(features_output_path, 'wb') as f:
-        pickle.dump(feature_dict, f, protocol=4)
+    # features_output_path = os.path.join(target_output_dir, f'features_{current_id}.pkl')
+    # with open(features_output_path, 'wb') as f:
+    #     pickle.dump(feature_dict, f, protocol=4)
 
     num_models = len(model_runners)
     for model_index, (model_name, model_runner) in enumerate(model_runners.items()):
         print("\n")
         print(f'Predicting target={target_id}, run={current_id}, model={model_name}')
         model_random_seed = model_index + random_seed * num_models
-
-        model_outdir = os.path.join(target_output_dir, f"{current_id}", model_name)
-        os.makedirs(model_outdir, exist_ok=True)
 
         try:
             # Alphafold feature processing
@@ -172,19 +169,25 @@ def predict_structure(sequences, msas, template_hits, renumber_list,
             # Inference
             t = time.time()
             prediction_result = model_runner.predict(
-                processed_feature_dict, random_seed=model_random_seed, outfile=model_outdir
+                processed_feature_dict, random_seed=model_random_seed, outfile=target_output_dir
             )
             timings[f'gen_embeddings.{model_name}'] = time.time() - t
 
+            # Drop unnecessary keys from prediction_result
+            reduced_representations = {k: v for k, v in prediction_result["representations"].items() if k not in ["msa", "msa_first_row", "structure_module"]}
+            reduced_result = {k: v for k, v in prediction_result.items() if k not in ["representations", "experimentally_resolved", "masked_msa", "predicted_lddt", "structure_module"]}
+            reduced_result["representations"] = reduced_representations
+            # TODO make pair and single representation float32 here
+
             # Build unrelaxed PDB
-            plddt = prediction_result['plddt']
-            ranking_confidences[model_name] = prediction_result['ranking_confidence']
+            plddt = reduced_result['plddt']
+            ranking_confidences[model_name] = reduced_result['ranking_confidence']
             plddt_b_factors = np.repeat(plddt[:, None], residue_constants.atom_type_num, axis=-1)
 
             t = time.time()
             unrelaxed_protein = protein.from_prediction(
                 features=processed_feature_dict,
-                result=prediction_result,
+                result=reduced_result,
                 b_factors=plddt_b_factors,
                 remove_leading_feature_dimension=True
             )
@@ -209,17 +212,17 @@ def predict_structure(sequences, msas, template_hits, renumber_list,
                 with open(os.path.join(parent_output_dir, "pep_renumber_failures.log"), "a") as logf:
                     logf.write(f"[target={target_id}, run={current_id}, model={model_name}] renumber_pep failed: {repr(e)}\n")
 
-            prediction_result['pep_renumbered'] = success
-            prediction_result['pep_tails'] = pep_tails
+            reduced_result['pep_renumbered'] = success
+            reduced_result['pep_tails'] = pep_tails
 
             # Safe pdbnum_list build
             try:
                 left = ['P' + p for p in pep_pdbnum] if pep_pdbnum else []
                 n0 = len(sequences[0]) if sequences and sequences[0] is not None else 0
                 right = renumber_list[n0:] if renumber_list and len(renumber_list) >= n0 else []
-                prediction_result['pdbnum_list'] = left + right
+                reduced_result['pdbnum_list'] = left + right
             except Exception as e:
-                prediction_result['pdbnum_list'] = []
+                reduced_result['pdbnum_list'] = []
                 with open(os.path.join(parent_output_dir, "pdbnum_list_failures.log"), "a") as logf:
                     logf.write(f"[target={target_id}, run={current_id}, model={model_name}] pdbnum_list failed: {repr(e)}\n")
 
@@ -227,24 +230,24 @@ def predict_structure(sequences, msas, template_hits, renumber_list,
             if true_pdb:
                 try:
                     rmsds = postprocessing.compute_rmsds(unrelaxed_pdb_renumbered, true_pdb)
-                    prediction_result.update(rmsds)
+                    reduced_result.update(rmsds)
                 except Exception as e:
                     with open(os.path.join(parent_output_dir, "rmsd_failures.log"), "a") as logf:
                         logf.write(f"[target={target_id}, run={current_id}, model={model_name}] compute_rmsds failed: {repr(e)}\n")
 
            # Save results/PDBs
-            result_output_path = os.path.join(model_outdir, f'result_{current_id}_{model_name}.pkl')
+            result_output_path = os.path.join(target_output_dir, f'result_{current_id}_{model_name}.pkl')
             with open(result_output_path, 'wb') as f:
-                pickle.dump(prediction_result, f, protocol=4)
+                pickle.dump(reduced_result, f, protocol=4)
 
-            unrelaxed_pdb_path = os.path.join(model_outdir, f'structure_{current_id}_{model_name}.pdb')
+            unrelaxed_pdb_path = os.path.join(target_output_dir, f'structure_{current_id}_{model_name}.pdb')
             with open(unrelaxed_pdb_path, 'w') as f:
                 f.write(unrelaxed_pdb)
 
             timings[f'process_pdb.{model_name}'] = time.time() - t
 
             # OOM-saving edits: free large intermediates after saving
-            del processed_feature_dict, prediction_result, unrelaxed_protein, unrelaxed_pdb
+            del processed_feature_dict, prediction_result, reduced_result, unrelaxed_protein, unrelaxed_pdb
             gc.collect()
 
         except Exception as e:
@@ -370,8 +373,8 @@ def main(argv):
             t_delta = (time.time() - t_start) / 60
             print(f'Processed {len(inputs)} inputs in {t_delta:.2f} minutes.')
 
-            average_embeddings.main(output_dir, current_target_id)
-            print(f"Averaged embeddings for {current_target_id}.")
+            # average_embeddings.main(output_dir, current_target_id)
+            # print(f"Averaged embeddings for {current_target_id}.")
 
     except Exception as e:
         # Last-chance logger without assuming any locals exist
